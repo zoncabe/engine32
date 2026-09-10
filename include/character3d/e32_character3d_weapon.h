@@ -1,0 +1,107 @@
+#ifndef ENGINE_32_CHARACTER3D_WEAPON_H
+#define ENGINE_32_CHARACTER3D_WEAPON_H
+
+#include <stdint.h>
+#include "physics/math/e32_math.h"
+
+
+typedef struct Character3D Character3D;
+
+#define CHARACTER3D_WEAPON_DRAWN_NONE 0xFF
+
+
+typedef enum {
+
+	WEAPON_TYPE_HITSCAN,
+	WEAPON_TYPE_BALLISTIC,
+	WEAPON_TYPE_MELEE,
+	WEAPON_TYPE_COUNT,
+
+} WeaponType;
+
+/* How the shoot button becomes a shot, the same split the jump uses. It has
+   nothing to do with the weapon type: a hitscan laser can charge just as a
+   bow does. */
+typedef enum {
+	SHOOT_CHARGE,
+	SHOOT_SNAP,
+} ShootMode;
+
+typedef enum {
+
+	WEAPON_SLOT_WAIST,
+	WEAPON_SLOT_BACK,
+	WEAPON_SLOT_MELEE,
+	WEAPON_SLOT_COUNT,
+
+} WeaponSlotID;
+
+
+typedef struct WeaponDef {
+
+	const char *mesh;            /* object name inside the character model */
+	const char *bone;            /* bone the mesh is skinned to */
+	const char *holster_bone;    /* reference bone while holstered */
+	const char *hand_bone;       /* reference bone while drawn */
+
+	uint8_t type;
+	uint8_t shoot_mode;
+	uint8_t magazine_size;
+	uint8_t max_integrity;
+
+	Vector3 holster_position;    /* relative to holster_bone */
+	Quaternion holster_rotation;
+	Vector3 holding_position;    /* relative to hand_bone */
+	Quaternion holding_rotation;
+
+} WeaponDef;
+
+typedef struct WeaponSlot {
+
+	const WeaponDef *weapon;     /* NULL = empty slot */
+	uint8_t rounds;
+	uint8_t integrity;
+
+	uint8_t part;                /* resolved mesh part (visibility bit) */
+	int16_t bone;                /* resolved bone indices */
+	int16_t holster_bone;
+	int16_t hand_bone;
+
+} WeaponSlot;
+
+/* Which model objects are weapons, in mesh part order. */
+typedef struct Character3DWeaponsDef {
+
+	const char *const *mesh;
+	uint8_t mesh_count;
+
+	/* What the character starts carrying. Only seeds the slots: equipping and
+	   unequipping afterwards is runtime state on the Character3D. */
+	const WeaponDef *weapon[WEAPON_SLOT_COUNT];
+
+} Character3DWeaponsDef;
+
+typedef struct Character3DWeapons {
+
+	const Character3DWeaponsDef *def;
+	WeaponSlot slot[WEAPON_SLOT_COUNT];
+	uint8_t    drawn;            /* slot in hand, CHARACTER3D_WEAPON_DRAWN_NONE = all holstered */
+
+} Character3DWeapons;
+
+
+void character3d_equipWeapon  (Character3D *character, uint8_t slot, const WeaponDef *weapon);
+void character3d_unequipWeapon(Character3D *character, uint8_t slot);
+
+/* Steps the drawn weapon through the occupied slots, unarmed included as a
+   stop of its own. dir +1 / -1. */
+void character3d_cycleWeapon(Character3D *character, int8_t dir);
+
+/* What the hand carries right now; NULL when everything is holstered. */
+const WeaponDef *character3d_drawnWeapon(const Character3D *character);
+
+/* Poses the weapon bones (holster or hand). Runs before the skeleton update. */
+void character3dWeapon_setBones(Character3D *character);
+
+
+#endif

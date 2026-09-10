@@ -1,0 +1,44 @@
+#ifndef ENGINE_32_FONT_H
+#define ENGINE_32_FONT_H
+
+#include <libdragon.h>
+#include "physics/math/e32_vector2.h"
+
+
+typedef struct {
+
+	uint8_t          id;      /* rdpq style id */
+	rdpq_fontstyle_t style;   /* color, outline color, custom callback */
+
+} FontStyle;
+
+typedef struct {
+
+	const char      *path;   /* NULL = unused slot (0 is: rdpq reserves font id 0) */
+	const FontStyle *style;
+	uint8_t          style_count;
+
+} FontDef;
+
+/* The game's font ids are rdpq ids, counting up from 1. The engine's own
+   fonts count down from the top of rdpq's 256 slots, so the two never meet. */
+#define DEBUG_FONT 255
+
+typedef struct {
+	uint8_t                  font;
+	uint8_t                  style;
+	const char              *text;
+	const rdpq_textparms_t  *parms;
+} Text;
+
+
+/* Hands the engine the game's font table, indexed by font id. Runs once,
+   before any scene loads. Nothing is loaded here: the 2D scene loads the
+   fonts its texts name and frees them on the way out. */
+void font_init(const FontDef *fonts, uint8_t count);
+
+void font_loadAsset(uint8_t id);
+void font_unloadAsset(uint8_t id);
+void text_draw(const Text *element, Vector2 position);
+
+#endif
