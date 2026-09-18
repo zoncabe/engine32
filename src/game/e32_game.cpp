@@ -23,6 +23,15 @@
 #ifdef ENGINE_32_PARTICLES
 #include "particles/e32_particles.h"
 #endif
+#ifdef E32_TRACE
+#include "common/hardware/counters.h"
+#include "debug/e32_debug.h"
+
+uint32_t debug_profile_state;
+uint32_t debug_profile_input;
+uint32_t debug_profile_setup;
+uint32_t debug_profile_end;
+#endif
 
 
 static Game game;
@@ -94,11 +103,24 @@ void game_runStep(void)
 	sound_poll();
 #endif
 
+#ifdef E32_TRACE
+	uint16_t t0 = (uint16_t)COUNTERS[2].value;
+#endif
+
 	Time::get().update();
 
 	controller_poll();
 
+#ifdef E32_TRACE
+	uint16_t t1 = (uint16_t)COUNTERS[2].value;
+	debug_profile_input += (uint16_t)(t1 - t0);
+#endif
+
 	game_updateState();
+
+#ifdef E32_TRACE
+	debug_profile_state += (uint16_t)((uint16_t)COUNTERS[2].value - t1);
+#endif
 
 #ifdef ENGINE_32_SOUND
 	sound_update();

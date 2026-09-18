@@ -43,11 +43,24 @@ static Fixed fromRaw(int32_t raw)
 }
 
 
-/* Which face lies across each edge of each face. Two faces never share a
-   vertex index, only a place, so every edge goes into a hash by the
-   positions of its two ends, the nearer-to-origin end first so both faces
-   build the same key; the second face to bring an edge is the first one's
-   neighbour across it. The hash lives only while this runs. */
+/* Which face lies across each edge of each face, over the whole model and
+   not one object at a time.
+
+   An object draws with one material, so the importer splits a mesh wherever
+   the material changes: a room modelled as one continuous surface arrives as
+   'walls' and 'floor', and the forty edges where they meet are edges all the
+   same. Built per object, neither side knows the other is there, so neither
+   covers the other's edge when they subdivide to different levels and the
+   seam opens. So the faces are numbered across the model and a neighbour is
+   one of those numbers.
+
+   The key is the edge's two ends by position, the nearer-to-origin end
+   first so both faces build the same one. Position indices would be
+   shorter, but they are object-local and mean nothing across the split.
+
+   Every edge goes into a hash by that key; the second face to bring an edge
+   is the first one's neighbour across it. The hash lives only while this
+   runs. */
 struct EdgeSlot
 {
 	uint32_t key[4];   /* x,y and z of each end */
@@ -56,7 +69,7 @@ struct EdgeSlot
 	uint8_t  used;
 };
 
-static void edgeKey(const RenderVertex *a, const RenderVertex *b, uint32_t *key)
+static void edgeKey(const RenderPosition *a, const RenderPosition *b, uint32_t *key)
 {
 	uint32_t axy = (uint32_t)(uint16_t)a->x | ((uint32_t)(uint16_t)a->y << 16), az = (uint16_t)a->z;
 	uint32_t bxy = (uint32_t)(uint16_t)b->x | ((uint32_t)(uint16_t)b->y << 16), bz = (uint16_t)b->z;
@@ -68,44 +81,63 @@ static void edgeKey(const RenderVertex *a, const RenderVertex *b, uint32_t *key)
 	}
 }
 
-static void buildAdjacency(Object *obj)
+static void buildAdjacency(Model *model)
 {
-	uint16_t *adjacent = (uint16_t *)allocate(sizeof(uint16_t) * 4 * obj->faceCount);
-	obj->adjacent = adjacent;
-	for (uint32_t i = 0; i < 4 * obj->faceCount; i++) adjacent[i] = MODEL_NO_FACE;
+	/* the faces numbered across the model, one run per object */
+	uint32_t total = 0;
+	for (int i = 0; i < model->objectCount; i++) {
+		model->objects[i].faceBase = total;
+		total += model->objects[i].faceCount;
+	}
+	model->faceCount = total;
+	if (total == 0) return;
+
+	uint16_t *adjacent = (uint16_t *)allocate(sizeof(uint16_t) * 4 * total);
+	model->adjacent = adjacent;
+	for (uint32_t i = 0; i < 4 * total; i++) adjacent[i] = MODEL_NO_FACE;
+
+	for (int i = 0; i < model->objectCount; i++)
+		model->objects[i].adjacent = adjacent + 4 * model->objects[i].faceBase;
 
 	/* room for twice the edges, so the probing stays short */
 	uint32_t slots = 16;
-	while (slots < obj->faceCount * 8) slots <<= 1;
+	while (slots < total * 8) slots <<= 1;
 	EdgeSlot *table = (EdgeSlot *)allocate(sizeof(EdgeSlot) * slots);
 	for (uint32_t i = 0; i < slots; i++) table[i].used = 0;
 
-	for (uint32_t f = 0; f < obj->faceCount; f++) {
-		const Face *face = &obj->faces[f];
-		int n = face->v[3] == MODEL_NO_VERTEX ? 3 : 4;
+	for (int o = 0; o < model->objectCount; o++) {
+		const Object *obj = &model->objects[o];
 
-		for (int k = 0; k < n; k++) {
-			uint32_t key[4];
-			edgeKey(&obj->vertices[face->v[k]], &obj->vertices[face->v[k + 1 == n ? 0 : k + 1]], key);
+		for (uint32_t f = 0; f < obj->faceCount; f++) {
+			const Face *face = &obj->faces[f];
+			int n = face->v[3] == MODEL_NO_VERTEX ? 3 : 4;
+			uint16_t me = (uint16_t)(obj->faceBase + f);
 
-			uint32_t h = (key[0] * 2654435761u) ^ (key[1] * 40503u) ^ (key[2] * 97u) ^ key[3];
-			h ^= h >> 15;
+			for (int k = 0; k < n; k++) {
+				uint32_t key[4];
+				edgeKey(&obj->positions[obj->vertices[face->v[k]].position],
+				        &obj->positions[obj->vertices[face->v[k + 1 == n ? 0 : k + 1]].position],
+				        key);
 
-			for (uint32_t i = h & (slots - 1); ; i = (i + 1) & (slots - 1)) {
-				EdgeSlot *slot = &table[i];
-				if (!slot->used) {
-					slot->key[0] = key[0]; slot->key[1] = key[1];
-					slot->key[2] = key[2]; slot->key[3] = key[3];
-					slot->face = (uint16_t)f;
-					slot->edge = (uint8_t)k;
-					slot->used = 1;
-					break;
-				}
-				if (slot->key[0] == key[0] && slot->key[1] == key[1]
-				 && slot->key[2] == key[2] && slot->key[3] == key[3]) {
-					adjacent[f * 4 + k] = slot->face;
-					adjacent[slot->face * 4 + slot->edge] = (uint16_t)f;
-					break;
+				uint32_t h = (key[0] * 2654435761u) ^ (key[1] * 40503u) ^ (key[2] * 97u) ^ key[3];
+				h ^= h >> 15;
+
+				for (uint32_t i = h & (slots - 1); ; i = (i + 1) & (slots - 1)) {
+					EdgeSlot *slot = &table[i];
+					if (!slot->used) {
+						slot->key[0] = key[0]; slot->key[1] = key[1];
+						slot->key[2] = key[2]; slot->key[3] = key[3];
+						slot->face = me;
+						slot->edge = (uint8_t)k;
+						slot->used = 1;
+						break;
+					}
+					if (slot->key[0] == key[0] && slot->key[1] == key[1]
+					 && slot->key[2] == key[2] && slot->key[3] == key[3]) {
+						adjacent[me * 4 + k] = slot->face;
+						adjacent[slot->face * 4 + slot->edge] = me;
+						break;
+					}
 				}
 			}
 		}
@@ -170,8 +202,10 @@ Model *Model::load(const char *path)
 		Object *obj = &model->objects[i];
 
 		obj->name        = (const char *)(data + src->name);
-		obj->vertexCount = src->vertex_count;
-		obj->faceCount   = src->face_count;
+		obj->vertexCount   = src->vertex_count;
+		obj->positionCount = src->position_count;
+		obj->shadeCount    = src->shade_count;
+		obj->faceCount     = src->face_count;
 		obj->material    = src->material < header->material_count
 		                 ? &model->materials[src->material] : NULL;
 		obj->isVisible   = 1;
@@ -183,11 +217,14 @@ Model *Model::load(const char *path)
 			obj->aabbMax[k] = src->aabb_max[k];
 		}
 		obj->vertices    = (const RenderVertex *)(data + src->vertices);
+		obj->positions   = (const RenderPosition *)(data + src->positions);
+		obj->shades      = (const RenderShade *)(data + src->shades);
 		obj->faces       = (const Face *)(data + src->faces);
 		obj->boneIndices = src->bone_indices ? data + src->bone_indices : NULL;
-
-		buildAdjacency(obj);
 	}
+
+	/* Over every object at once: an edge two objects share is an edge. */
+	buildAdjacency(model);
 
 	/* skeleton */
 	if (header->skeleton) {
@@ -267,8 +304,8 @@ void Model::free()
 		psyqo_free(skeleton);
 	}
 
-	for (int i = 0; i < objectCount; i++)
-		if (objects[i].adjacent) psyqo_free((void *)objects[i].adjacent);
+	/* One array for the whole model; the objects only point into it. */
+	if (adjacent) psyqo_free((void *)adjacent);
 	if (objects)   psyqo_free(objects);
 	if (materials) psyqo_free(materials);
 	psyqo_free(this);

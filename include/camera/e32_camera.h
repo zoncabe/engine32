@@ -66,6 +66,10 @@ struct Camera
 
 	CameraType type;
 
+	/* The buttons that move this camera, or NULL when none name it. Wired
+	   when the state is loaded, from the controls that state declared. */
+	const struct CameraControlBinding *binding;
+
 	struct {
 		CameraSpringArmSettings settings;
 		CameraSpringArmData     data;

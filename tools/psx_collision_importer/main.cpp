@@ -135,13 +135,32 @@ static void readObj(const char *path, Mesh *mesh)
 			}
 			if (count < 3) continue;
 
-			/* A fan from the first corner: quads and larger faces become
-			   triangles, which is all the collision mesh holds. */
-			uint16_t first = weldVertex(mesh, &welded, positions[corner[0]].data());
-			for (int k = 1; k + 1 < count; k++) {
-				mesh->indices.push_back(first);
-				mesh->indices.push_back(weldVertex(mesh, &welded, positions[corner[k]].data()));
-				mesh->indices.push_back(weldVertex(mesh, &welded, positions[corner[k + 1]].data()));
+			/* The face as triangles, cut exactly where the render cuts it.
+			   A quad reaches the GPU as the corners A, B, D, C and the GPU
+			   draws it as ABC and BCD, so its diagonal joins the contour's
+			   second and fourth corners, not the first and third. Cutting a
+			   quad the other way builds a different surface whenever the
+			   four corners are not coplanar: the fold runs the opposite way
+			   and the collision stops matching what is drawn. A face of more
+			   than four corners is a quad plus a fan from the first corner,
+			   the same the model importer emits. */
+			uint16_t v[16];
+			for (int k = 0; k < count; k++)
+				v[k] = weldVertex(mesh, &welded, positions[corner[k]].data());
+
+			auto triangle = [&](int a, int b, int c) {
+				mesh->indices.push_back(v[a]);
+				mesh->indices.push_back(v[b]);
+				mesh->indices.push_back(v[c]);
+			};
+
+			if (count == 3) {
+				triangle(0, 1, 2);
+			} else {
+				triangle(0, 1, 3);
+				triangle(1, 2, 3);
+				for (int k = 3; k + 1 < count; k++)
+					triangle(0, k, k + 1);
 			}
 		}
 	}

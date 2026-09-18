@@ -65,6 +65,17 @@ public:
 	   rotation, and a point light becomes the direction from the object to
 	   it, dimmed by distance. */
 	static void set(const Light *light, const Transform *model);
+
+	/* The same, measuring each light from a point given in the model's own
+	   space instead of from the model's origin. What per-vertex lighting
+	   passes: the vertex itself, so the direction and the fade are the ones
+	   that reach it rather than the ones that reach the whole object. */
+	static void setAt(const Light *light, const Transform *model, const Vector3 &local_point);
+
+	/* Whether any light declared needs a point to be measured from. A scene
+	   of directionals answers false, and per-vertex lighting then costs
+	   nothing over the plain path. */
+	static bool hasPositional(const Light *light);
 };
 
 #endif

@@ -67,6 +67,10 @@ static void cameraControl_setAiming(Camera *camera, bool aiming, Fixed dt)
 void CameraControl::update(Camera *camera, const CameraControlBinding *binding,
                            const Scene3D *scene, Fixed dt)
 {
+	/* No binding is the normal state of a camera no controls name: it holds
+	   whatever the scene placed it with and the sticks leave it alone. */
+	if (binding == NULL) return;
+
 	const Controller *controller = &controller_get()[binding->player];
 
 	Fixed x =  axis_get(controller, binding->pan);

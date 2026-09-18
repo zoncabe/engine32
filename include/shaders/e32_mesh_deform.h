@@ -44,10 +44,17 @@ struct MeshDeform
 
 	/* The GPU runs behind the CPU, so writing one buffer every frame lets it
 	   read vertices half-overwritten. One copy per framebuffer, bound at
-	   draw time, keeps the frame being drawn intact. */
-	RenderVertex *vertex_buffer[MESH_DEFORM_BUFFERS];
-	uint32_t      vertex_bytes;
-	uint8_t       bound_buffer;   /* the copy the render reads this frame */
+	   draw time, keeps the frame being drawn intact.
+
+	   The model shares a position and a shade between the corners that agree
+	   on them; a driven slot does not, since the source moves each one on its
+	   own and may carry its own normal. So the deform gives every slot a
+	   position and a shade of its own, and its corners index themselves. That
+	   table never changes, so there is one of it. */
+	RenderPosition *position_buffer[MESH_DEFORM_BUFFERS];
+	RenderShade    *shade_buffer[MESH_DEFORM_BUFFERS];
+	RenderVertex   *vertex_map;
+	uint8_t         bound_buffer;   /* the copy the render reads this frame */
 
 	/* Optional: one normal per source point, in the same order. The source
 	   decides its own winding, which may run against the model's, so the
@@ -80,7 +87,17 @@ struct MeshDeform
 	/* This frame's vertices of one object, from the bound buffer. */
 	const RenderVertex *vertices(uint32_t object) const
 	{
-		return vertex_buffer[bound_buffer] + object_offset[object];
+		return vertex_map + object_offset[object];
+	}
+
+	const RenderPosition *positions(uint32_t object) const
+	{
+		return position_buffer[bound_buffer] + object_offset[object];
+	}
+
+	const RenderShade *shades(uint32_t object) const
+	{
+		return shade_buffer[bound_buffer] + object_offset[object];
 	}
 
 	void destroy();

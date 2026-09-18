@@ -10,10 +10,16 @@
 
 /* What a body can be asked to do. What a character does not do is left out:
    an unwritten button is BTN_NONE and reads as never pressed. */
+struct Prefab3D;
+
 struct Character3DControlBinding
 {
 	/* Whose seat drives this body. */
 	PlayerID player;
+
+	/* The prefab it drives is what seats the player: the scene builds one
+	   body from it, and that body is the one this controller moves. */
+	const Prefab3D *character;
 
 	ButtonID jump;
 	ButtonID roll;

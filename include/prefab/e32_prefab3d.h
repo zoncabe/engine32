@@ -42,6 +42,37 @@ struct Prefab3D
 	   things, where the pieces would only cost. */
 	bool subdivide;
 
+	/* Lights this model a vertex at a time instead of once for the whole
+	   object. A point light is measured from the object's origin by default,
+	   so a big piece takes one direction and one fade for all of it: a room
+	   lit from a lamp inside it gets no falloff at all, and a shell with the
+	   lamp at its centre gets nothing. Per vertex each point gets the
+	   direction and the fade that actually reach it.
+
+	   It costs a reload of the GTE's light matrix per vertex, so it is worth
+	   it on what a point light is meant to shape and wasted on the rest.
+	   Nothing to pay in a scene of directional lights: there is no point to
+	   measure from and the flag is ignored. */
+	bool vertex_lighting;
+
+	/* The same, per named part: one flag per name in .part, in the same
+	   order. A model whose lamp needs it and whose post does not says so
+	   here, and the flag above is what part 0, the unnamed remainder, and a
+	   model with no parts go by. */
+	const bool *part_vertex_lighting;
+
+	/* Objects inside the model the game drives on its own, named as they are
+	   named in the model, so it can show and hide each one. Left out, the
+	   model is drawn whole. Up to seven names. */
+	const char *const *part;
+
+	/* Where each of those objects is drawn, in the entity's own space and in
+	   the same order as the names. A part left at zero stays where it was
+	   modelled. */
+	const Vector3 *part_position;
+
+	uint8_t part_count;
+
 	/* Opened in the entity from create to delete. The looping ones play on
 	   their own; the rest wait for whoever fires them. */
 	const SoundDef *const *sound;

@@ -58,7 +58,15 @@ struct Entity3DColliderDef
 struct Entity3DDef
 {
 	const char *model_path;   /* NULL: nothing to draw, a sound placed alone */
-	bool        subdivide;    /* cut big faces when drawn; see Prefab3D */
+	bool        subdivide;       /* cut big faces when drawn; see Prefab3D */
+	bool        vertex_lighting;              /* light a vertex at a time; see Prefab3D */
+	const bool *part_vertex_lighting;         /* the same per named part; see Prefab3D */
+
+	/* The model's own objects, named and placed: see Prefab3D. Left out, the
+	   model is drawn whole. */
+	const char *const *part;
+	const Vector3     *part_position;
+	uint8_t            part_count;
 	const SoundDef *const *sound;
 	uint8_t                sound_count;
 	Vector3     position;
@@ -76,6 +84,10 @@ struct Entity3DDef
 void entity3d_init(Entity3D *entity, const Entity3DDef *def);
 Entity3D *entity3d_create(const Entity3DDef *def);
 void entity3d_delete(Entity3D *entity);
+
+/* Shows or hides one of the model's own objects, by the name the prefab
+   listed in .part. A name the entity has no part for does nothing. */
+void entity3d_setPartVisible(Entity3D *entity, const char *name, bool visible);
 void entity3d_setTransform(Entity3D *entity, const KinematicBody *body);
 void entity3d_setMatrix(Entity3D *entity, uint8_t fb_index);
 void entity3d_setMatrixFromBody(Entity3D *entity, uint8_t fb_index);

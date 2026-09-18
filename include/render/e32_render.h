@@ -34,6 +34,17 @@
    meters; anything past it is not drawn. */
 #define RENDER_OT_SIZE 4096
 
+/* How many of the models' units one bucket covers, as a shift. One unit
+   each, so the table's length is what fixes how far it reaches: 64 units
+   to the metre against a 50 metre far plane needs 3200 buckets.
+
+   A larger shift reaches the same distance in fewer entries and costs
+   less to clear and to chain, but sorts coarser: faces at close depths
+   fall in one bucket and are painted in the order they went in, which
+   changes as the camera turns. Measured at four units a bucket it was
+   nine horizontal blanks cheaper and the order visibly swapped. */
+#define RENDER_OT_SHIFT 0
+
 struct Scene3D;
 struct Scene2D;
 struct Graphic;

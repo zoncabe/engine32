@@ -51,6 +51,13 @@ void Render::init()
 	write<Register::OFX, Unsafe>((uint32_t)(SCREEN_WIDTH  / 2) << 16);
 	write<Register::OFY, Safe>((uint32_t)(SCREEN_HEIGHT / 2) << 16);
 
+	/* What AVSZ3 and AVSZ4 multiply the sum of the depths by, 4.12: a third
+	   and a quarter, so the command leaves the average depth in OTZ. That is
+	   the table's bucket, computed by the coprocessor in five cycles instead
+	   of by the CPU over values read back from memory. */
+	write<Register::ZSF3, Unsafe>((uint32_t)(4096 / 3));
+	write<Register::ZSF4, Safe>((uint32_t)(4096 / 4));
+
 	/* No mask test: the BIOS shell leaves the GPU's mask state behind, and
 	   with the test on, nothing lands over a pixel whose mask bit is set. */
 	psyqo::Prim::MaskControl mask(psyqo::Prim::MaskControl::Set::FromSource,
@@ -174,6 +181,10 @@ void Render::frame()
 	/* the hardware's horizontal blank counter, 16 bits */
 	uint32_t began = COUNTERS[1].value;
 
+#ifdef E32_TRACE
+	uint16_t t0 = (uint16_t)COUNTERS[2].value;
+#endif
+
 	initContext(ctx);
 	scene3d_setRenderContext(scene3d_get(), ctx, viewport);
 #ifdef ENGINE_32_SCENE2D
@@ -200,11 +211,54 @@ void Render::frame()
 		mesh_profile_faces = 0;
 		mesh_profile_transform = 0;
 		mesh_profile_emit = 0;
+		mesh_profile_pieces = 0;
+		mesh_profile_cuts = 0;
+		mesh_profile_walked = 0;
+		mesh_profile_clip = 0;
+		mesh_profile_prim = 0;
+		mesh_profile_direct = 0;
+		mesh_profile_cut = 0;
+		mesh_profile_lerp = 0;
+		mesh_profile_project = 0;
+		mesh_profile_level = 0;
+		mesh_profile_object = 0;
+		mesh_profile_draw = 0;
+		mesh_profile_prep = 0;
+		mesh_profile_cut2 = 0;
+		mesh_profile_slow = 0;
+		mesh_profile_back = 0;
+		mesh_profile_far = 0;
+		mesh_profile_whole = 0;
+		mesh_profile_sub = 0;
+		mesh_profile_cover = 0;
+		mesh_profile_light = 0;
+		mesh_profile_elements = 0;
+#ifdef E32_TRACE
+		debug_profile_setup += (uint16_t)((uint16_t)COUNTERS[2].value - t0);
+#endif
 		uint32_t drawing = COUNTERS[1].value;
-		for (int i = 0; i < ctx->object_count; i++)
+
+		/* Drawing the list backwards was tried, on the grounds that the table
+		   hangs each new primitive at the front of its bucket's chain, so the
+		   first element inserted is drawn last and covers the rest of what
+		   lands in the same bucket. It changed nothing on screen: the
+		   polygons that fight are not landing in the same bucket. */
+		for (int i = 0; i < ctx->object_count; i++) {
 			ctx->object[i].mesh->draw(&ctx->object[i]);
+#ifdef E32_OTZ_TRACE
+			debug_traceOtz(i, ctx->object[i].mesh->subdivide,
+			               mesh_otz_min, mesh_otz_max);
+#endif
+		}
+#ifdef E32_OTZ_TRACE
+		debug_traceOtzEnd();
+#endif
 		_draw_hblanks = (COUNTERS[1].value - drawing) & 0xFFFF;
 	}
+
+#ifdef E32_TRACE
+	uint16_t t1 = (uint16_t)COUNTERS[2].value;
+#endif
 
 #ifdef ENGINE_32_PARTICLES
 	particles_draw();
@@ -212,7 +266,15 @@ void Render::frame()
 
 	end();
 
+#ifdef E32_TRACE
+	debug_profile_end += (uint16_t)((uint16_t)COUNTERS[2].value - t1);
+#endif
+
 	_hblanks = (COUNTERS[1].value - began) & 0xFFFF;
 
 	debugUI_draw();
+
+#ifdef E32_TRACE
+	debug_trace();
+#endif
 }

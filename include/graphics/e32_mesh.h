@@ -78,6 +78,16 @@ struct ModelDrawConf
 	uint8_t glow_scroll_u, glow_scroll_v;
 };
 
+/* Declaring a model's parts and where each one is drawn, for a prefab:
+   MESH_PARTS lists the object names as they are named in the model,
+   MESH_PART_POSITIONS one position per name, in the same order. */
+#define MESH_PARTS(...)          (const char *const[]){ __VA_ARGS__ }
+#define MESH_PART_POSITIONS(...) (const Vector3[])   { __VA_ARGS__ }
+
+/* One flag per name, same order: which parts light a vertex at a time. */
+#define MESH_PART_LIGHTING(...)  (const bool[])      { __VA_ARGS__ }
+
+
 struct Mesh
 {
 	/* Recorded parts: the part each object belongs to, part-major. A static
@@ -88,9 +98,26 @@ struct Mesh
 	uint8_t        dl_buffers;    /* palettes per part: 1, or FB_COUNT when skinned */
 	uint8_t        visible;       /* bitmask: parts to render */
 	Transform     *matrix_buffer; /* model transform per fb; NULL = identity */
+
+	/* A part drawn away from where it was modelled. The offsets are the
+	   prefab's, in the entity's own space; the matrices are the model
+	   transform with each one folded in, rebuilt per frame buffer whenever
+	   the mesh's matrix is written. Both NULL when no part is displaced,
+	   which is every mesh that does not ask for it. */
+	const Vector3 *part_offset;   /* one per named part, part 1 first */
+	Transform     *part_matrix;   /* dl_count per frame buffer */
+
+	/* The names the parts were recorded with, so the game can address one by
+	   the name it wrote in the prefab. The caller's array, part 1 first. */
+	const char *const *part_name;
+	uint8_t            part_count;   /* named parts; dl_count is one more */
 	Model         *model;
 	Armature      *skeleton;      /* NULL = static mesh (set by character3d_create) */
-	bool           subdivide;     /* cut big faces when drawn; see Prefab3D */
+	bool           subdivide;       /* cut big faces when drawn; see Prefab3D */
+
+	/* Which parts light a vertex at a time, a bit per part, part 0 first.
+	   A mesh with no parts recorded reads bit 0. See Prefab3D. */
+	uint8_t        vertex_lighting;
 
 	/* Bone palette of a skinned mesh: FB_COUNT runs of one transform per
 	   bone, composed on the CPU each frame (updatePalette) and read by the
@@ -137,6 +164,35 @@ struct Mesh
 	   and draws every part over its run of it per frame buffer. */
 	void recordParts(const char *const *names, uint8_t count);
 
+	/* Where each named part is drawn inside the entity, one entry per name and
+	   in the same order, so count is the number of names, not the parts. Part
+	   0, everything the names left out, is always drawn where it was modelled.
+	   The offsets are the caller's and must outlive the mesh, the way the
+	   names do. A part left at zero stays where it was modelled. Call after
+	   recordParts. */
+	void setPartOffsets(const Vector3 *offsets, uint8_t count);
+
+	/* The part a name stands for, 1 based, or 0 when the mesh has no part by
+	   that name. Part 0 is the unnamed remainder and has no name to find. */
+	uint8_t findPart(const char *name) const;
+
+	void setPartVisible(uint8_t part, bool shown)
+	{
+		if (part >= dl_count) return;
+		if (shown) visible |=  (uint8_t)(1u << part);
+		else       visible &= (uint8_t)~(1u << part);
+	}
+
+	bool isPartVisible(uint8_t part) const { return (visible & (1u << part)) != 0; }
+
+	/* The matrix this part is drawn with: the mesh's own, or the one carrying
+	   its offset. Never NULL once a matrix buffer exists. */
+	const Transform *partMatrix(uint8_t part, uint8_t fb_index) const
+	{
+		if (!part_matrix) return matrix_buffer ? &matrix_buffer[fb_index] : NULL;
+		return &part_matrix[fb_index * dl_count + part];
+	}
+
 	/* The palette run a part reads this frame. */
 	const Transform *partPalette(uint8_t fb_index) const
 	{
@@ -168,9 +224,12 @@ struct Mesh
 	   is drawn. No-op when the mesh is not deformed. */
 	void bindDeformFrame(uint8_t fb_index);
 
-	/* The vertices the render reads for an object this frame: the deform's
-	   copy when there is one, the model's otherwise. */
-	const RenderVertex *vertices(uint32_t object) const;
+	/* The three tables the render reads for an object this frame: the
+	   deform's copy when there is one, the model's otherwise. A vertex is a
+	   corner, and holds an index into each of the other two. */
+	const RenderVertex   *vertices(uint32_t object) const;
+	const RenderPosition *positions(uint32_t object) const;
+	const RenderShade    *shades(uint32_t object) const;
 
 	/* Draws one element of the mesh into the frame: every object of the
 	   part (or every visible object, through the object path) goes through
@@ -189,6 +248,74 @@ extern uint32_t mesh_profile_faces;
    table, in ticks of root counter 2 (0.24 us). The rest is the cutting. */
 extern uint32_t mesh_profile_transform;
 extern uint32_t mesh_profile_emit;
+
+/* How many times a piece is offered for drawing: once per face of a whole
+   mesh, once per cell of a subdivided one. Against the primitives the
+   frame ends up with, it says how much of the work is thrown away. */
+extern uint32_t mesh_profile_pieces;
+
+/* How many pieces had to be cut to the view, and how many faces the loop
+   walked at all. */
+extern uint32_t mesh_profile_cuts;
+extern uint32_t mesh_profile_walked;
+
+/* The time the cutting takes, and the time everything a face goes through
+   after the loop has picked it takes, in ticks of root counter 2. */
+extern uint32_t mesh_profile_clip;
+extern uint32_t mesh_profile_prim;
+
+/* The cutting broken down, same ticks. 'cut' is the Sutherland-Hodgman walk
+   alone, without what it emits; within it, 'lerp' is the interpolation of
+   the points where an edge crosses a side, and 'project' is putting those
+   new points on the screen through the GTE. */
+extern uint32_t mesh_profile_direct;
+extern uint32_t mesh_profile_cut;
+extern uint32_t mesh_profile_lerp;
+extern uint32_t mesh_profile_project;
+
+/* What the drawing costs outside the face loops, same ticks. 'level' is the
+   pass that settles every face's subdivision over the whole model, 'object'
+   is what each object takes before its faces start: its material, the scroll,
+   and the growth of the scratch buffers. */
+extern uint32_t mesh_profile_level;
+extern uint32_t mesh_profile_object;
+
+/* The whole of Mesh::draw, per element, same ticks. */
+extern uint32_t mesh_profile_draw;
+
+/* What every element costs before any of its objects is looked at: folding
+   the view with its placement, and putting the lights in its space. */
+extern uint32_t mesh_profile_prep;
+
+/* Within it, putting the lights in the element's space alone, and how many
+   elements the frame drew. */
+/* The same cut walked a second time, right after the first, so that the
+   second finds the code in the instruction cache and the first does not.
+   Built only with E32_MESH_CUT_TWICE, which makes the engine do the work
+   twice: a measurement, never a build to ship. */
+extern uint32_t mesh_profile_cut2;
+
+/* mesh_prim broken down, same ticks: a face drawn whole, a face cut in
+   pieces, and the cover triangles along an edge a finer neighbour meets.
+   The cutting and the emission live inside all three. */
+/* Counts, not ticks: of the faces the direct loop walks, the ones handed to
+   the path that cuts, the ones dropped for looking away, and the ones
+   dropped for their depth. */
+/* The lowest and highest bucket of the ordering table the element being
+   drawn wrote into. Read right after a Mesh::draw returns. */
+extern uint32_t mesh_otz_min;
+extern uint32_t mesh_otz_max;
+
+extern uint32_t mesh_profile_slow;
+extern uint32_t mesh_profile_back;
+extern uint32_t mesh_profile_far;
+
+extern uint32_t mesh_profile_whole;
+extern uint32_t mesh_profile_sub;
+extern uint32_t mesh_profile_cover;
+
+extern uint32_t mesh_profile_light;
+extern uint32_t mesh_profile_elements;
 
 
 #endif

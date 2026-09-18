@@ -92,8 +92,13 @@ void scene3d_load(const Scene3DDef *def)
 		/* entity3d.cpp builds from a flat parameter block: filled here
 		   straight from the prefab and its placement, and gone after the load. */
 		Entity3DDef entity_def = {};
-		entity_def.model_path  = prefab->model;
-		entity_def.subdivide   = prefab->subdivide;
+		entity_def.model_path    = prefab->model;
+		entity_def.subdivide     = prefab->subdivide;
+		entity_def.vertex_lighting = prefab->vertex_lighting;
+		entity_def.part_vertex_lighting = prefab->part_vertex_lighting;
+		entity_def.part          = prefab->part;
+		entity_def.part_position = prefab->part_position;
+		entity_def.part_count    = prefab->part_count;
 		entity_def.sound       = prefab->sound;
 		entity_def.sound_count = prefab->sound_count;
 		entity_def.position    = placed->position;
@@ -273,7 +278,11 @@ void scene3d_setRenderContext(const Scene3D *s, RenderContext *ctx, const Viewpo
 			if (!(mesh->visible & (1u << part))) continue;
 
 			psyqo::Kernel::assert(ctx->object_count < RENDER_MAX_3D_ELEMENTS, "render: too many elements");
-			ctx->object[ctx->object_count++] = { mesh, (uint8_t)part, matrix, skel, mesh->partPalette(fb_index), NULL };
+			/* A part placed away from where it was modelled carries its own
+			   matrix; every other one is drawn with the mesh's. */
+			const Transform *part_matrix = mesh->partMatrix((uint8_t)part, fb_index);
+
+			ctx->object[ctx->object_count++] = { mesh, (uint8_t)part, part_matrix, skel, mesh->partPalette(fb_index), NULL };
 		}
 	}
 }

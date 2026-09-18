@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 #define MODEL_MAGIC   "E32M"
-#define MODEL_VERSION 2
+#define MODEL_VERSION 3
 
 /* Blender meters to the GTE's integer: the 6 fractional bits of 10.6.
    From the CPU's 20.12 that is a shift of 12 - 6 bits. */
@@ -41,12 +41,35 @@ typedef struct ModelFileHeader {
 	uint16_t _pad;
 } ModelFileHeader;
 
-typedef struct ModelFileVertex {
-	int16_t  x, y, z, _pad0;
-	int16_t  nx, ny, nz, _pad1;
+/* A corner of a face is three things, and each of them is shared by a
+   different set of corners, so each gets its own table and the corner
+   holds indices into them.
+
+   The GTE's projection of a point depends on the position and on nothing
+   else, and its lighting of a point depends on the normal and the color
+   that modulates it and on nothing else that changes within an object:
+   the light directions and colors are written into the coprocessor once
+   per element. So each table is answered once per entry instead of once
+   per corner, and the corners that share an entry copy the answer.
+
+   What forced the corners apart in the first place was the texture
+   coordinate and the flat shaded normal, neither of which the projection
+   cares about: a room of 152 modelled points came out as 440 corners. */
+
+typedef struct ModelFilePosition {
+	int16_t x, y, z, _pad;
+} ModelFilePosition;
+
+typedef struct ModelFileShade {
+	int16_t  nx, ny, nz, _pad;
 	uint8_t  r, g, b, a;
+} ModelFileShade;
+
+typedef struct ModelFileVertex {
+	uint16_t position;   /* into the object's ModelFilePosition[] */
+	uint16_t shade;      /* into the object's ModelFileShade[] */
 	uint8_t  u, v;
-	uint16_t _pad2;
+	uint16_t _pad;
 } ModelFileVertex;
 
 /* A triangle or a quad: four vertex indices, the last one MODEL_NO_VERTEX
@@ -64,10 +87,14 @@ typedef struct ModelFileObject {
 	uint16_t material;
 	uint16_t vertex_count;
 	uint16_t face_count;
+	uint16_t position_count;
+	uint16_t shade_count;
 	uint16_t _pad;
 	int16_t  aabb_min[3];
 	int16_t  aabb_max[3];
 	uint32_t vertices;      /* ModelFileVertex[vertex_count] */
+	uint32_t positions;     /* ModelFilePosition[position_count] */
+	uint32_t shades;        /* ModelFileShade[shade_count] */
 	uint32_t faces;         /* ModelFileFace[face_count] */
 	uint32_t bone_indices;  /* uint8_t[vertex_count]; zero when the object is not skinned */
 } ModelFileObject;

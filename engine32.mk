@@ -22,7 +22,11 @@
 # they go under $(BUILD_DIR), the way the rest of this engine's builds work.
 
 BUILD_DIR  ?= build
-NUGGET_DIR ?= $(ENGINE_DIR)/../librerias/nugget
+
+# Next to the engine, or one level further up when the engine sits inside a
+# subdirectory of the workspace. The first one that exists wins.
+NUGGET_SEARCH = $(ENGINE_DIR)/../librerias/nugget $(ENGINE_DIR)/../../librerias/nugget
+NUGGET_DIR ?= $(firstword $(wildcard $(NUGGET_SEARCH)) $(ENGINE_DIR)/../librerias/nugget)
 PSYQO_DIR  ?= $(NUGGET_DIR)/psyqo
 
 EXE = $(PROJECT_NAME).ps-exe
@@ -301,8 +305,12 @@ $(CUE) $(BIN): $(EXE) $(BUILD_DIR)/cd.xml
 
 cd: $(CUE)
 
+# Only what the build wrote: the two asset directories it fills, and then
+# filesystem itself through rmdir, which drops it when the build was all it
+# held and leaves it alone when the game keeps its own files there.
 clean:
 	rm -rf $(BUILD_DIR) $(EXE) $(CUE) $(BIN) filesystem/models filesystem/collision
+	-@rmdir filesystem 2>/dev/null || true
 
 # Also drops libpsyqo.a and its objects, which live in the nugget checkout.
 deepclean: clean

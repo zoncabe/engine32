@@ -12,6 +12,9 @@
 #ifdef ENGINE_32_PLAYER
 #include "player/e32_player.h"
 #endif
+/* Not under the player switch: the state table carries its controls either
+   way, and binding them is what a scene load ends with. */
+#include "control/e32_player_control.h"
 #include "game/e32_game.h"
 #include "game/e32_game_states.h"
 
@@ -30,7 +33,9 @@ static void gameState_load(GameState id)
 {
 	if (game_state[id].scene3d) {
 		scene3d_load(game_state[id].scene3d);
-		if (game_state[id].bindCharacter) game_state[id].bindCharacter();
+
+		/* After the scene: the bodies the controls name exist from here on. */
+		controls_bind(game_state[id].controls, game_state[id].scene3d);
 	}
 #ifdef ENGINE_32_SCENE2D
 	if (game_state[id].scene2d) scene2d_load(game_state[id].scene2d);
@@ -54,7 +59,8 @@ static void gameState_unload(GameState id)
 
 static bool gameState_isOverlayPair(GameState prev, GameState next)
 {
-	return game_state[next].overlay_of == prev || game_state[prev].overlay_of == next;
+	return game_state[next].overlay_of == &game_state[prev]
+	    || game_state[prev].overlay_of == &game_state[next];
 }
 
 /* Asking to leave is not leaving: the state names where it goes, and the
@@ -83,7 +89,7 @@ static void gameState_settle(Game *game)
 #ifdef ENGINE_32_SCENE2D
 		if (game_state[new_state].scene2d) scene2d_load(game_state[new_state].scene2d);
 #endif
-		if (game_state[new_state].overlay_of == prev && game_state[new_state].onEnter)
+		if (game_state[new_state].overlay_of == &game_state[prev] && game_state[new_state].onEnter)
 			game_state[new_state].onEnter();
 		return;
 	}
@@ -93,8 +99,8 @@ static void gameState_settle(Game *game)
 	System::get().getGpu().waitChainIdle();
 	gameState_unload(prev);
 	/* An abandoned overlay takes its base state down with it. */
-	if (game_state[prev].overlay_of != GAME_STATE_NONE)
-		gameState_unload(game_state[prev].overlay_of);
+	if (game_state[prev].overlay_of)
+		gameState_unload((GameState)(game_state[prev].overlay_of - game_state));
 	game->state = new_state;
 	gameState_load(new_state);
 

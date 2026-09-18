@@ -69,6 +69,9 @@ Entity3D *entity3d_create(const Entity3DDef *def)
 
 	entity->mesh->skeleton   = NULL;
 	entity->mesh->subdivide  = def->subdivide;
+	/* Part 0 and every part the def does not single out follow the model-wide
+	   flag; a named part with its own says what it says. */
+	entity->mesh->vertex_lighting = def->vertex_lighting ? 0xFF : 0;
 	entity->mesh->deform     = NULL;
 	entity->mesh->draw_conf  = NULL;
 	entity->mesh->palette    = NULL;
@@ -82,12 +85,43 @@ Entity3D *entity3d_create(const Entity3DDef *def)
 	} else if (def->cloth) {
 		/* One part with the whole model in it. */
 		entity->mesh->recordParts(NULL, 0);
+	} else if (def->part_count) {
+		/* The model is static, so its parts record with no palette, and every
+		   one of them starts on screen: a prop shows whole until the game
+		   decides to hide something. */
+		entity->mesh->recordParts(def->part, def->part_count);
+		entity->mesh->visible = (uint8_t)((1u << entity->mesh->dl_count) - 1);
+
+		/* A part declared away from where it was modelled gets its offset
+		   here, so it is already in place the first time it is drawn. */
+		if (def->part_position)
+			entity->mesh->setPartOffsets(def->part_position, def->part_count);
+
+		if (def->part_vertex_lighting) {
+			uint8_t mask = def->vertex_lighting ? 1 : 0;   /* part 0, the remainder */
+			for (uint8_t i = 0; i < def->part_count; i++)
+				if (def->part_vertex_lighting[i]) mask |= (uint8_t)(1u << (i + 1));
+			entity->mesh->vertex_lighting = mask;
+		}
 	} else {
 		entity->mesh->recordObjects();
 	}
 
 	return entity;
 }
+
+/* Shows or hides one of the model's own objects, by the name the prefab
+   recorded it under. A name the entity has no part for does nothing. */
+void entity3d_setPartVisible(Entity3D *entity, const char *name, bool visible)
+{
+	if (entity->mesh == NULL) return;
+
+	uint8_t part = entity->mesh->findPart(name);
+	if (part == 0) return;
+
+	entity->mesh->setPartVisible(part, visible);
+}
+
 
 void entity3d_delete(Entity3D *entity)
 {
@@ -98,6 +132,7 @@ void entity3d_delete(Entity3D *entity)
 			entity->mesh->deform->destroy();
 			psyqo_free(entity->mesh->deform);
 		}
+		if (entity->mesh->part_matrix) psyqo_free(entity->mesh->part_matrix);
 		psyqo_free(entity->mesh->bound);
 		psyqo_free(entity->mesh->matrix_buffer);
 		entity->mesh->model->free();

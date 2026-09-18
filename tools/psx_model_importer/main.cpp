@@ -50,6 +50,8 @@ struct Object {
 	std::string name;
 	uint16_t material = 0;
 	std::vector<ModelFileVertex> vertices;
+	std::vector<ModelFilePosition> positions;
+	std::vector<ModelFileShade> shades;
 	std::vector<ModelFileFace> faces;
 	int16_t aabb_min[3], aabb_max[3];
 };
@@ -214,17 +216,25 @@ struct ObjFile {
 	std::vector<Object> objects;
 };
 
-/* A vertex of the output is one distinct combination of position, texel
-   coordinate and normal, so a corner maps to the same slot every time it
-   comes back with the same three. Texels are assigned per face, so the
-   key holds the texel, not the OBJ texture index. */
-struct Slot { int v, n; uint8_t u, t; bool operator<(const Slot &o) const { return memcmp(this, &o, sizeof(*this)) < 0; } };
+/* The three tables a corner indexes. Each key is the quantized value the
+   console reads, not the OBJ index: two OBJ entries that land on the same
+   integers are the same entry to the GTE, and the point of the tables is
+   that the coprocessor answers once per entry.
+
+   A position is deduplicated by its 10.6 triple, a shade by its 4.12
+   normal plus the color that modulates it. A vertex is one distinct
+   combination of position, shade and texel, which is the same set of
+   corners the single table used to hold. Texels are assigned per face, so
+   the key holds the texel, not the OBJ texture index. */
+struct PositionKey { int16_t x, y, z; bool operator<(const PositionKey &o) const { return memcmp(this, &o, sizeof(*this)) < 0; } };
+struct ShadeKey { int16_t nx, ny, nz; uint8_t r, g, b, a; bool operator<(const ShadeKey &o) const { return memcmp(this, &o, sizeof(*this)) < 0; } };
+struct Slot { uint16_t p, s; uint8_t u, t; bool operator<(const Slot &o) const { return memcmp(this, &o, sizeof(*this)) < 0; } };
 
 static void finishObject(Object *obj)
 {
 	for (int i = 0; i < 3; i++) { obj->aabb_min[i] = 32767; obj->aabb_max[i] = -32768; }
-	for (const ModelFileVertex &v : obj->vertices) {
-		const int16_t *pv = &v.x;
+	for (const ModelFilePosition &p : obj->positions) {
+		const int16_t *pv = &p.x;
 		for (int k = 0; k < 3; k++) {
 			if (pv[k] < obj->aabb_min[k]) obj->aabb_min[k] = pv[k];
 			if (pv[k] > obj->aabb_max[k]) obj->aabb_max[k] = pv[k];
@@ -244,6 +254,8 @@ static bool readObj(const std::string &path, ObjFile *file)
 	Object *obj = nullptr;
 	uint16_t material = 0xFFFF;
 	std::map<Slot, uint16_t> slots;
+	std::map<PositionKey, uint16_t> position_slots;
+	std::map<ShadeKey, uint16_t> shade_slots;
 	char line[4096];
 
 	auto beginObject = [&](const std::string &name) {
@@ -252,6 +264,8 @@ static bool readObj(const std::string &path, ObjFile *file)
 		obj->name = name;
 		obj->material = material;
 		slots.clear();
+		position_slots.clear();
+		shade_slots.clear();
 	};
 
 	while (fgets(line, sizeof(line), f)) {
@@ -364,7 +378,71 @@ static bool readObj(const std::string &path, ObjFile *file)
 						t = clamp8(q0);
 					}
 
-					Slot key = { c.v, c.n, u, t };
+					const std::array<float, 3> &p = file->positions[c.v];
+					PositionKey pkey;
+					memset(&pkey, 0, sizeof(pkey));
+					pkey.x = clamp16(p[0] * MODEL_UNITS_PER_METER);
+					pkey.y = clamp16(p[1] * MODEL_UNITS_PER_METER);
+					pkey.z = clamp16(p[2] * MODEL_UNITS_PER_METER);
+
+					float n[3] = {0, 0, 1};
+					if (c.n >= 0 && c.n < (int)file->normals.size())
+						for (int r = 0; r < 3; r++) n[r] = file->normals[c.n][r];
+					float len = sqrtf(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
+					if (len > 0.0f) for (int r = 0; r < 3; r++) n[r] /= len;
+
+					const std::array<float, 3> &col = file->colors[c.v];
+					ShadeKey skey;
+					memset(&skey, 0, sizeof(skey));
+					/* 4.12, and 1.0 is 4096: it fits, but the GTE's limiter
+					   treats exactly 4096 as saturation, so stop one short. */
+					skey.nx = clamp16(n[0] * 4095.0f);
+					skey.ny = clamp16(n[1] * 4095.0f);
+					skey.nz = clamp16(n[2] * 4095.0f);
+					skey.r  = clamp8(col[0] * 255.0f);
+					skey.g  = clamp8(col[1] * 255.0f);
+					skey.b  = clamp8(col[2] * 255.0f);
+					skey.a  = 255;
+
+					uint16_t pi, si;
+					auto pit = position_slots.find(pkey);
+					if (pit != position_slots.end()) {
+						pi = pit->second;
+					} else {
+						ModelFilePosition mp;
+						memset(&mp, 0, sizeof(mp));
+						mp.x = pkey.x;
+						mp.y = pkey.y;
+						mp.z = pkey.z;
+						pi = (uint16_t)obj->positions.size();
+						obj->positions.push_back(mp);
+						position_slots[pkey] = pi;
+					}
+
+					auto sit = shade_slots.find(skey);
+					if (sit != shade_slots.end()) {
+						si = sit->second;
+					} else {
+						ModelFileShade ms;
+						memset(&ms, 0, sizeof(ms));
+						ms.nx = skey.nx;
+						ms.ny = skey.ny;
+						ms.nz = skey.nz;
+						ms.r  = skey.r;
+						ms.g  = skey.g;
+						ms.b  = skey.b;
+						ms.a  = skey.a;
+						si = (uint16_t)obj->shades.size();
+						obj->shades.push_back(ms);
+						shade_slots[skey] = si;
+					}
+
+					Slot key;
+					memset(&key, 0, sizeof(key));
+					key.p = pi;
+					key.s = si;
+					key.u = u;
+					key.t = t;
 					auto it = slots.find(key);
 					uint16_t index;
 					if (it != slots.end()) {
@@ -372,30 +450,8 @@ static bool readObj(const std::string &path, ObjFile *file)
 					} else {
 						ModelFileVertex v;
 						memset(&v, 0, sizeof(v));
-
-						const std::array<float, 3> &p = file->positions[c.v];
-						v.x = clamp16(p[0] * MODEL_UNITS_PER_METER);
-						v.y = clamp16(p[1] * MODEL_UNITS_PER_METER);
-						v.z = clamp16(p[2] * MODEL_UNITS_PER_METER);
-
-						float n[3] = {0, 0, 1};
-						if (c.n >= 0 && c.n < (int)file->normals.size())
-							for (int r = 0; r < 3; r++) n[r] = file->normals[c.n][r];
-						float len = sqrtf(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
-						if (len > 0.0f) for (int r = 0; r < 3; r++) n[r] /= len;
-
-						/* 4.12, and 1.0 is 4096: it fits, but the GTE's limiter
-						   treats exactly 4096 as saturation, so stop one short. */
-						v.nx = clamp16(n[0] * 4095.0f);
-						v.ny = clamp16(n[1] * 4095.0f);
-						v.nz = clamp16(n[2] * 4095.0f);
-
-						const std::array<float, 3> &col = file->colors[c.v];
-						v.r = clamp8(col[0] * 255.0f);
-						v.g = clamp8(col[1] * 255.0f);
-						v.b = clamp8(col[2] * 255.0f);
-						v.a = 255;
-
+						v.position = pi;
+						v.shade    = si;
 						v.u = u;
 						v.v = t;
 
@@ -525,8 +581,10 @@ static void writeModel(const char *path, const std::vector<Material> &materials,
 		memset(&o, 0, sizeof(o));
 		o.name         = object_names[i];
 		o.material     = objects[i].material;
-		o.vertex_count = (uint16_t)objects[i].vertices.size();
-		o.face_count   = (uint16_t)objects[i].faces.size();
+		o.vertex_count   = (uint16_t)objects[i].vertices.size();
+		o.face_count     = (uint16_t)objects[i].faces.size();
+		o.position_count = (uint16_t)objects[i].positions.size();
+		o.shade_count    = (uint16_t)objects[i].shades.size();
 		memcpy(o.aabb_min, objects[i].aabb_min, sizeof(o.aabb_min));
 		memcpy(o.aabb_max, objects[i].aabb_max, sizeof(o.aabb_max));
 		object_at.push_back(w.put(&o, sizeof(o)));
@@ -535,9 +593,15 @@ static void writeModel(const char *path, const std::vector<Material> &materials,
 		w.align();
 		uint32_t v = w.put(objects[i].vertices.data(), objects[i].vertices.size() * sizeof(ModelFileVertex));
 		w.align();
+		uint32_t p = w.put(objects[i].positions.data(), objects[i].positions.size() * sizeof(ModelFilePosition));
+		w.align();
+		uint32_t s = w.put(objects[i].shades.data(), objects[i].shades.size() * sizeof(ModelFileShade));
+		w.align();
 		uint32_t x = w.put(objects[i].faces.data(), objects[i].faces.size() * sizeof(ModelFileFace));
-		w.patch(object_at[i] + offsetof(ModelFileObject, vertices), &v, 4);
-		w.patch(object_at[i] + offsetof(ModelFileObject, faces),    &x, 4);
+		w.patch(object_at[i] + offsetof(ModelFileObject, vertices),  &v, 4);
+		w.patch(object_at[i] + offsetof(ModelFileObject, positions), &p, 4);
+		w.patch(object_at[i] + offsetof(ModelFileObject, shades),    &s, 4);
+		w.patch(object_at[i] + offsetof(ModelFileObject, faces),     &x, 4);
 	}
 	w.align();
 
@@ -553,8 +617,9 @@ static void writeModel(const char *path, const std::vector<Material> &materials,
 		for (const Object &o : objects) {
 			size_t quads = 0;
 			for (const ModelFileFace &face : o.faces) if (face.v[3] != MODEL_NO_VERTEX) quads++;
-			printf("  %s: %zu vertices, %zu faces (%zu quads), material %u\n",
-			       o.name.c_str(), o.vertices.size(), o.faces.size(), quads, o.material);
+			printf("  %s: %zu vertices (%zu positions, %zu shades), %zu faces (%zu quads), material %u\n",
+			       o.name.c_str(), o.vertices.size(), o.positions.size(), o.shades.size(),
+			       o.faces.size(), quads, o.material);
 		}
 		for (const Material &m : materials)
 			printf("  %s: %ux%u\n", m.name.c_str(), m.width, m.height);

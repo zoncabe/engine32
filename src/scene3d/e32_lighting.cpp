@@ -36,8 +36,24 @@ void Lighting::setAmbient(const Light *light)
 	psyqo::GTE::write<psyqo::GTE::Register::BBK, psyqo::GTE::Safe>((uint32_t)intensity(light->ambient_color.b).raw());
 }
 
+bool Lighting::hasPositional(const Light *light)
+{
+	for (int i = 0; i < LIGHT_COUNT; i++) {
+		if (light->source[i].type == LIGHT_NONE) break;
+		if (light->source[i].type == LIGHT_POINT) return true;
+	}
+	return false;
+}
+
 void Lighting::set(const Light *light, const Transform *model)
 {
+	setAt(light, model, Vector3::zero());
+}
+
+void Lighting::setAt(const Light *light, const Transform *model, const Vector3 &local_point)
+{
+	const Vector3 from = model->mulVector(local_point);
+
 	psyqo::Matrix33 directions = {};
 	psyqo::Matrix33 colors     = {};
 
@@ -54,7 +70,7 @@ void Lighting::set(const Light *light, const Transform *model)
 		} else {
 			/* From the object to the light, fading linearly to nothing at
 			   the light's size. */
-			direction = source->point.position - model->position;
+			direction = source->point.position - from;
 			Fixed distance = direction.magnitude();
 			if (distance == 0) continue;
 			direction *= 1 / distance;

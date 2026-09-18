@@ -27,10 +27,19 @@
 constexpr Fixed ANIM_KEYFRAME_TICK = 0.016666_fp;
 
 
-/* Model vertex, straight from the file and fed to the GTE as-is: positions
- * 10.6 in the console's units, normals 4.12, color bytes and texel
- * coordinates. See ModelFileVertex. */
-typedef ModelFileVertex RenderVertex;
+/* A corner of a face: indices into the object's position and shade tables
+ * plus its own texel coordinates. See ModelFileVertex.
+ *
+ * The position is what the GTE projects and the shade is what it lights,
+ * each one answered once per table entry instead of once per corner: a
+ * texture seam or a flat shaded face splits corners apart without changing
+ * either table. */
+typedef ModelFileVertex   RenderVertex;
+
+/* Positions 10.6 in the console's units; normals 4.12 with the color that
+ * modulates them. Both fed to the GTE as they are. */
+typedef ModelFilePosition RenderPosition;
+typedef ModelFileShade    RenderShade;
 
 
 struct Material
@@ -60,6 +69,8 @@ struct Object
 {
 	const char *name;
 	uint32_t vertexCount;
+	uint32_t positionCount;
+	uint32_t shadeCount;
 	uint32_t faceCount;
 	Material *material;
 	uint8_t isVisible; /* set by culling checks, otherwise no effect on rendering */
@@ -70,15 +81,25 @@ struct Object
 	int16_t aabbMax[3];
 
 	/* Slices of the file, resolved to pointers at load time. Face indices
-	   are object-local: they address 'vertices'. */
-	const RenderVertex *vertices;
+	   are object-local: they address 'vertices', whose own indices address
+	   'positions' and 'shades'. */
+	const RenderVertex   *vertices;
+	const RenderPosition *positions;
+	const RenderShade    *shades;
 	const Face *faces;
 	const uint8_t *boneIndices; /* NULL when the object is not skinned */
 
+	/* Where this object's faces start in the model's numbering. An object
+	   draws with one material, so a continuous surface arrives split in
+	   several; the faces are numbered across the model so that a face can
+	   name a neighbour on the other side of that split. */
+	uint32_t faceBase;
+
 	/* The face across each edge of each face, four per face in the face's
-	   own order, MODEL_NO_FACE where there is none. Built at load by
-	   matching the edges' ends by position, since the importer splits the
-	   vertices per face. The render reads it to cut shared edges alike. */
+	   own order, MODEL_NO_FACE where there is none. Points into the model's
+	   own array at this object's run, and the numbers it holds are the
+	   model's, not this object's. Built at load by matching the edges' ends
+	   by position. The render reads it to cut shared edges alike. */
 	const uint16_t *adjacent;
 };
 
@@ -180,6 +201,13 @@ struct Model
 	uint16_t  objectCount;
 	uint16_t  materialCount;
 
+	/* The faces of every object together, and the neighbour across each of
+	   their edges, four per face. Numbered across the model so that two
+	   objects the importer split apart at a material change still know they
+	   touch. See Object::faceBase. */
+	uint32_t        faceCount;
+	const uint16_t *adjacent;
+
 	SkeletonData  *skeleton;    /* NULL when the model has none */
 	AnimationData *animations;
 	uint16_t       animationCount;
@@ -241,9 +269,9 @@ struct Model
 
 /* Vertex-buffer helpers. */
 
-static inline const int16_t* vertbuffer_getPos(const RenderVertex vert[], int idx)
+static inline const int16_t* vertbuffer_getPos(const RenderPosition pos[], int idx)
 {
-	return &vert[idx].x;
+	return &pos[idx].x;
 }
 
 static inline const uint8_t* vertbuffer_getUv(const RenderVertex vert[], int idx)
@@ -251,14 +279,14 @@ static inline const uint8_t* vertbuffer_getUv(const RenderVertex vert[], int idx
 	return &vert[idx].u;
 }
 
-static inline const uint8_t* vertbuffer_getRgba(const RenderVertex vert[], int idx)
+static inline const uint8_t* vertbuffer_getRgba(const RenderShade shade[], int idx)
 {
-	return &vert[idx].r;
+	return &shade[idx].r;
 }
 
-static inline const int16_t* vertbuffer_getNorm(const RenderVertex vert[], int idx)
+static inline const int16_t* vertbuffer_getNorm(const RenderShade shade[], int idx)
 {
-	return &vert[idx].nx;
+	return &shade[idx].nx;
 }
 
 

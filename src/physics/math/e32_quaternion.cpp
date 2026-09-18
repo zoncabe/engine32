@@ -20,10 +20,21 @@ Quaternion Quaternion::fromAxisAngle(const Vector3 &axis, Angle angle)
 	return q;
 }
 
+/* The half angle comes from the vector part against w, never from acos(w).
+   On a unit quaternion the two agree, but acos is vertical at 1: a w one
+   step below it, which is all a normalise in 20.12 can promise, reads as
+   several degrees, and sqrt(1 - w*w) turns that same step into an axis
+   length out of nothing. The identity then leaves here as a few degrees
+   around whatever axis the caller substitutes for the degenerate one, and a
+   static body built that way sits rotated against the mesh it was authored
+   with. Measuring the vector part instead keeps zero at zero. */
 void Quaternion::toAxisAngle(Vector3 *axis, Angle *angle) const
 {
-	*angle = Trig::acos(w) * 2;
-	Fixed l = sqrt(1 - w * w);
+	Vector3 v = {x, y, z};
+	Fixed   l = v.magnitude();
+
+	*angle = Trig::atan2(l, w) * 2;
+
 	if (l == 0) {
 		*axis = Vector3::zero();
 	} else {

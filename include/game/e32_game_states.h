@@ -9,20 +9,18 @@ struct Game;
 struct Scene3DDef;
 struct Scene2DDef;
 struct Player;
+struct ControlsDef;
 
 /* Index into the state table the game hands to game_start. */
 typedef uint8_t GameState;
 
-/* No state: the overlay_of sentinel. A field left out of a designated
-   initializer is 0, which is a valid state, so every table entry must set
-   overlay_of explicitly. */
+/* No state: what a state index reads as when there is none. */
 #define GAME_STATE_NONE 0xFF
 
 
 struct GameStateDef
 {
 	void (*update)();
-	void (*bindCharacter)();
 	void (*onEnter)();
 	void (*onExit)();
 
@@ -39,9 +37,15 @@ struct GameStateDef
 	const Scene3DDef    *scene3d;
 	const Scene2DDef    *scene2d;
 
-	/* The state this one rides on top of; GAME_STATE_NONE for none.
-	   Switching between an overlay and its base leaves the base untouched. */
-	GameState          overlay_of;
+	/* What the game drives this state with. Wired once, after the scene is
+	   loaded and before the first update: the player is seated on the body
+	   its binding names, and the camera answers to the buttons that name it. */
+	const ControlsDef   *controls;
+
+	/* The table entry this one rides on top of (&states[BASE]); NULL, the
+	   default, for none. Switching between an overlay and its base leaves
+	   the base untouched. */
+	const GameStateDef *overlay_of;
 };
 
 

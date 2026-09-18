@@ -146,11 +146,11 @@ bool MeshDeform::bind(Model *model_, const Vector3 *source_, const Vector3 *sour
 	Fixed agreement = Fixed();
 
 	for (int o = 0; o < model->objectCount; o++) {
-		const RenderVertex *verts = model->objects[o].vertices;
+		const Object *obj = &model->objects[o];
 
-		for (uint32_t v = 0; v < model->objects[o].vertexCount; v++) {
+		for (uint32_t v = 0; v < obj->vertexCount; v++) {
 			uint16_t slot = (uint16_t)(object_offset[o] + v);
-			const int16_t *pos = vertbuffer_getPos(verts, v);
+			const int16_t *pos = vertbuffer_getPos(obj->positions, obj->vertices[v].position);
 			uint16_t match = meshDeform_find(bucket, capacity - 1, pos);
 
 			slot_source[slot] = match;
@@ -159,7 +159,8 @@ bool MeshDeform::bind(Model *model_, const Vector3 *source_, const Vector3 *sour
 			bound_count++;
 
 			if (source_normal) {
-				Vector3 own = meshDeform_unpackNormal(vertbuffer_getNorm(verts, v));
+				Vector3 own = meshDeform_unpackNormal(
+					vertbuffer_getNorm(obj->shades, obj->vertices[v].shade));
 				Vector3 src = source_normal[match];
 
 				agreement += own.dot(src);
@@ -171,16 +172,38 @@ bool MeshDeform::bind(Model *model_, const Vector3 *source_, const Vector3 *sour
 
 	psyqo_free(bucket);
 
-	vertex_bytes = sizeof(RenderVertex) * slot_count;
+	/* The corners, once: every slot points at its own position and shade,
+	   and keeps the texel the model gave it. */
+	vertex_map = (RenderVertex *)psyqo_malloc(sizeof(RenderVertex) * slot_count);
+	if (vertex_map == NULL) return false;
 
+	for (int o = 0; o < model->objectCount; o++) {
+		const Object *obj = &model->objects[o];
+		RenderVertex *dst = vertex_map + object_offset[o];
+		for (uint32_t v = 0; v < obj->vertexCount; v++) {
+			dst[v].position = (uint16_t)v;
+			dst[v].shade    = (uint16_t)v;
+			dst[v].u        = obj->vertices[v].u;
+			dst[v].v        = obj->vertices[v].v;
+			dst[v]._pad     = 0;
+		}
+	}
+
+	/* And the model's own values into every buffer, so a slot that found no
+	   source point stays where it was modelled. */
 	for (int i = 0; i < MESH_DEFORM_BUFFERS; i++) {
-		vertex_buffer[i] = (RenderVertex *)psyqo_malloc(vertex_bytes);
-		if (vertex_buffer[i] == NULL) return false;
+		position_buffer[i] = (RenderPosition *)psyqo_malloc(sizeof(RenderPosition) * slot_count);
+		shade_buffer[i]    = (RenderShade *)psyqo_malloc(sizeof(RenderShade) * slot_count);
+		if (position_buffer[i] == NULL || shade_buffer[i] == NULL) return false;
 
 		for (int o = 0; o < model->objectCount; o++) {
 			const Object *obj = &model->objects[o];
-			RenderVertex *dst = vertex_buffer[i] + object_offset[o];
-			for (uint32_t v = 0; v < obj->vertexCount; v++) dst[v] = obj->vertices[v];
+			RenderPosition *dp = position_buffer[i] + object_offset[o];
+			RenderShade    *ds = shade_buffer[i]    + object_offset[o];
+			for (uint32_t v = 0; v < obj->vertexCount; v++) {
+				dp[v] = obj->positions[obj->vertices[v].position];
+				ds[v] = obj->shades[obj->vertices[v].shade];
+			}
 		}
 	}
 
@@ -201,23 +224,24 @@ void MeshDeform::apply(uint8_t fb_index)
 
 	/* This frame's copy, not the model's buffer: the GPU is still reading
 	   the one the previous frame was drawn from. */
-	RenderVertex *verts = vertex_buffer[fb_index % MESH_DEFORM_BUFFERS];
-	if (verts == NULL) return;
+	RenderPosition *pos   = position_buffer[fb_index % MESH_DEFORM_BUFFERS];
+	RenderShade    *shade = shade_buffer[fb_index % MESH_DEFORM_BUFFERS];
+	if (pos == NULL || shade == NULL) return;
 
 	for (uint16_t slot = 0; slot < slot_count; slot++) {
 		uint16_t index = slot_source[slot];
 		if (index == MESH_DEFORM_UNBOUND) continue;
 
-		meshDeform_quantize(source[index], scale, &verts[slot].x);
+		meshDeform_quantize(source[index], scale, &pos[slot].x);
 
 		if (source_normal)
-			meshDeform_packNormal(source_normal[index], normal_sign, &verts[slot].nx);
+			meshDeform_packNormal(source_normal[index], normal_sign, &shade[slot].nx);
 
 		if (source_rgba) {
-			verts[slot].r = source_rgba[index * 4 + 0];
-			verts[slot].g = source_rgba[index * 4 + 1];
-			verts[slot].b = source_rgba[index * 4 + 2];
-			verts[slot].a = source_rgba[index * 4 + 3];
+			shade[slot].r = source_rgba[index * 4 + 0];
+			shade[slot].g = source_rgba[index * 4 + 1];
+			shade[slot].b = source_rgba[index * 4 + 2];
+			shade[slot].a = source_rgba[index * 4 + 3];
 		}
 	}
 }
@@ -227,9 +251,12 @@ void MeshDeform::destroy()
 {
 	if (slot_source)   psyqo_free(slot_source);
 	if (object_offset) psyqo_free(object_offset);
+	if (vertex_map)    psyqo_free(vertex_map);
 
-	for (int i = 0; i < MESH_DEFORM_BUFFERS; i++)
-		if (vertex_buffer[i]) psyqo_free(vertex_buffer[i]);
+	for (int i = 0; i < MESH_DEFORM_BUFFERS; i++) {
+		if (position_buffer[i]) psyqo_free(position_buffer[i]);
+		if (shade_buffer[i])    psyqo_free(shade_buffer[i]);
+	}
 
 	*this = MeshDeform();
 }
